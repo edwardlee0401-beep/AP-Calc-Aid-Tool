@@ -1,8 +1,9 @@
 import streamlit as st
-from openai import OpenAI
+from google import genai
+import re
 
-# Initialize the AI client securely
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# Initialize the Gemini client securely
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 # --- USER INTERFACE ---
 st.title("AP Calculus BC AI Study Aid")
@@ -11,56 +12,96 @@ st.title("AP Calculus BC AI Study Aid")
 col1, col2 = st.columns(2)
 with col1:
     unit = st.selectbox("Select Unit", [
+        "Unit 1: Limits and Continuity",
+        "Unit 2: Differentiation: Definition and Fundamental Properties",
+        "Unit 3: Differentiation: Composite, Implicit, and Inverse Functions",
+        "Unit 4: Contextual Applications of Differentiation",
+        "Unit 5: Analytical Applications of Differentiation",
+        "Unit 6: Integration and Accumulation of Change",
+        "Unit 7: Differential Equations",
         "Unit 8: Applications of Integration",
-        "Unit 9: Parametric, Polar, and Vectors",
+        "Unit 9: Parametric Equations, Polar Coordinates, and Vector-Valued Functions",
         "Unit 10: Infinite Sequences and Series"
     ])
 with col2:
     topic = st.text_input("Enter a specific topic (e.g., Taylor Polynomials)")
 
 # --- STATE MANAGEMENT ---
-# Streamlit reruns the script on every interaction, so we store the question in session_state
-if "question" not in st.session_state:
-    st.session_state.question = None
+if "questions" not in st.session_state:
+    st.session_state.questions = None
+if "feedback" not in st.session_state:
+    st.session_state.feedback = {"Easy": None, "Medium": None, "Hard": None}
 
-# --- GENERATE QUESTION ---
-if st.button("Generate Question"):
+# --- GENERATE QUESTIONS ---
+if st.button("Generate Questions"):
     if topic:
-        with st.spinner("Generating question..."):
-            prompt = f"""You are an AP Calculus BC teacher. Generate a single, challenging multiple-choice question on {unit}, specifically focusing on {topic}. 
-            Provide the question and options labeled A, B, C, and D. 
-            Do NOT provide the correct answer or explanation yet."""
+        with st.spinner("Generating Easy, Medium, and Hard questions..."):
+            prompt = f"""You are an AP Calculus BC teacher. Generate three separate multiple-choice questions on {unit}, specifically focusing on {topic}. 
             
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}]
+            The three questions must have distinctly different difficulty levels: one Easy, one Medium, and one Hard.
+            Format all mathematical expressions using standard inline LaTeX (wrapped in single dollar signs like $f(x) = x^2$).
+            
+            For each question, provide the question text and options labeled A, B, C, and D. Do NOT provide the correct answers or explanations yet.
+            
+            Label each section clearly with [EASY], [MEDIUM], and [HARD]."""
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
             )
-            st.session_state.question = response.choices[0].message.content
+            
+            raw_text = response.text
+            
+            # Robust parsing using Regular Expressions (ignores markdown, case, and extra spacing)
+            easy_match = re.search(r'(?:\[?EASY\]?)(.*?)(?=\[?MEDIUM\]?|\[?HARD\]?|$)', raw_text, re.DOTALL | re.IGNORECASE)
+            medium_match = re.search(r'(?:\[?MEDIUM\]?)(.*?)(?=\[?HARD\]?|$)', raw_text, re.DOTALL | re.IGNORECASE)
+            hard_match = re.search(r'(?:\[?HARD\]?)(.*?)(?=$)', raw_text, re.DOTALL | re.IGNORECASE)
+            
+            st.session_state.questions = {
+                "Easy": easy_match.group(1).strip() if easy_match else "Could not parse Easy question. Try again.",
+                "Medium": medium_match.group(1).strip() if medium_match else "Could not parse Medium question. Try again.",
+                "Hard": hard_match.group(1).strip() if hard_match else "Could not parse Hard question. Try again."
+            }
+            
+            # Clear previous feedback on a new generation
+            st.session_state.feedback = {"Easy": None, "Medium": None, "Hard": None}
     else:
         st.warning("Please enter a topic first.")
 
-# --- DISPLAY QUESTION & CHECK ANSWER ---
-if st.session_state.question:
+# --- DISPLAY QUESTIONS IN TABS ---
+if st.session_state.questions:
     st.divider()
-    st.subheader("Your Question")
-    st.write(st.session_state.question)
     
-    user_answer = st.text_input("Enter your answer (A, B, C, or D):").upper()
+    # Create three visual tabs for the difficulties
+    tab_easy, tab_medium, tab_hard = st.tabs(["🟢 Easy", "🟡 Medium", "🔴 Hard"])
     
-    if st.button("Submit Answer"):
-        if user_answer:
-            with st.spinner("Grading..."):
-                check_prompt = f"""The user answered {user_answer} to the following question:
-                {st.session_state.question}
-                
-                1. State whether the user is CORRECT or INCORRECT.
-                2. Explain the mathematical steps and reasoning to arrive at the correct answer."""
-                
-                explanation = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": check_prompt}]
-                )
-                st.subheader("Feedback & Explanation")
-                st.write(explanation.choices[0].message.content)
-        else:
-            st.warning("Please enter an answer before submitting.")
+    for diff, tab in [("Easy", tab_easy), ("Medium", tab_medium), ("Hard", tab_hard)]:
+        with tab:
+            st.subheader(f"{diff} Level Challenge")
+            st.write(st.session_state.questions[diff])
+            
+            # Unique keys per tab prevent input cross-talk
+            user_ans = st.text_input(f"Your Answer for {diff} (A, B, C, or D):", key=f"input_{diff}").upper()
+            
+            if st.button(f"Submit {diff} Answer", key=f"btn_{diff}"):
+                if user_ans:
+                    with st.spinner("Grading..."):
+                        check_prompt = f"""The user answered {user_ans} to the following {diff} level AP Calculus BC question:
+                        {st.session_state.questions[diff]}
+                        
+                        1. State whether the user is CORRECT or INCORRECT.
+                        2. Explain the step-by-step mathematical reasoning using LaTeX formatting for formulas."""
+                        
+                        explanation = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=check_prompt
+                        )
+                        st.session_state.feedback[diff] = explanation.text
+                else:
+                    st.warning("Please enter an answer letter first.")
+            
+            # Keep feedback visible inside the respective tab
+            if st.session_state.feedback[diff]:
+                st.divider()
+                st.subheader(f"{diff} Feedback")
+                st.write(st.session_state.feedback[diff])
