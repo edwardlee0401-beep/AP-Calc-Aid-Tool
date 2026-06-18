@@ -3,13 +3,22 @@ import streamlit as st
 from google import genai
 import re
 
-# Initialize the Gemini client securely
-api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
+# 1. Try to get the key from the system environment (Google Cloud)
+api_key = os.environ.get("GEMINI_API_KEY")
 
+# 2. If it's not there, try Streamlit secrets (Local machine)
+if not api_key:
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        api_key = None
+
+# 3. Stop the app safely if neither worked
 if not api_key:
     st.error("API Key not found. Please set GEMINI_API_KEY.")
     st.stop()
 
+# Initialize the Gemini client securely
 client = genai.Client(api_key=api_key)
 
 # --- USER INTERFACE ---
