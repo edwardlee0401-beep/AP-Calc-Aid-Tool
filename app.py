@@ -4,7 +4,13 @@ from google import genai
 import re
 
 # Initialize the Gemini client securely
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
+
+if not api_key:
+    st.error("API Key not found. Please set GEMINI_API_KEY.")
+    st.stop()
+
+client = genai.Client(api_key=api_key)
 
 # --- USER INTERFACE ---
 st.title("AP Calculus BC AI Study Aid")
